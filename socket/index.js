@@ -6,7 +6,6 @@ const {
   findLeadByCallerPhone,
   normalizePhoneForLead,
   isPhoneInputValid,
-  leadNeedsPhone,
 } = require('../utils/phone');
 
 /** Allow reconnect / refresh to reopen a recently ended conversation (ms). */
@@ -88,7 +87,6 @@ module.exports = function setupSockets(io) {
               resumed: true,
               greeting: null,
               messages: uiMessages,
-              needsPhone: leadNeedsPhone(lead),
             });
 
             claudeService
@@ -145,11 +143,11 @@ module.exports = function setupSockets(io) {
 
         let greetingToSend = null;
         if (!hadPriorConversations) {
-          // New lead: professional welcome + ask name (matches chat SALES_SYSTEM_PROMPT register)
+          // New lead: welcome + explain contact is collected in chat before project detail (matches SALES_SYSTEM_PROMPT)
           greetingToSend =
             isReturning && lead.name && lead.name !== 'Unknown'
               ? `Welcome back, ${lead.name}. I'm Alex at Steel Building Depot. What can I help you with on your project today?`
-              : "Hi — thanks for visiting Steel Building Depot. I'm Alex; I help folks get a ballpark on steel building projects. Could I get your name to get started?";
+              : "Hi — thanks for visiting Steel Building Depot. I'm Alex. To discuss your project properly and share any ballpark numbers, I'll need your name, email, and a phone number — all here in chat, nothing separate. Could we start with your name?";
           conversation.messages.push({ role: 'assistant', content: greetingToSend });
           await conversation.save();
         } else if (shouldSendLongGapGreeting) {
@@ -168,7 +166,6 @@ module.exports = function setupSockets(io) {
           isReturning,
           resumed: false,
           greeting: greetingToSend,
-          needsPhone: leadNeedsPhone(lead),
         });
 
         // Send previous history after session is ready
@@ -192,7 +189,7 @@ module.exports = function setupSockets(io) {
 
       } catch (err) {
         console.error('start_session error:', err);
-        socket.emit('error', { message: 'Failed to start session' });
+        socket.emit('chat_error', { message: 'Failed to start session' });
       }
     });
 
@@ -283,16 +280,12 @@ module.exports = function setupSockets(io) {
     socket.on('send_message', async ({ content }) => {
       try {
         if (!socket.conversationId || !socket.leadId) {
-          return socket.emit('error', { message: 'No active session' });
+          return socket.emit('chat_error', { message: 'No active session' });
         }
 
         const conversation = await Conversation.findById(socket.conversationId);
         const lead = await Lead.findById(socket.leadId);
         if (!conversation || !lead) return;
-
-        if (leadNeedsPhone(lead)) {
-          return socket.emit('error', { message: 'Please add your phone number to continue chatting.' });
-        }
 
         // Phone calls that ended after the customer's last web message (any chat thread for this lead).
         // Uses last *user* message time so a new session after a call still sees the call (startedAt alone can miss that).
@@ -373,6 +366,7 @@ module.exports = function setupSockets(io) {
             currentConversationSummary: conversation.contextSummary || '',
             recentVoiceHandoff,
             voiceCallFactSheet: String(conversation.voiceCallFactSheet || '').trim(),
+            lead,
           }
         );
 
@@ -467,7 +461,7 @@ module.exports = function setupSockets(io) {
       } catch (err) {
         console.error('send_message error:', err);
         socket.emit('ai_typing', false);
-        socket.emit('error', { message: 'Failed to send message' });
+        socket.emit('chat_error', { message: 'Failed to send message' });
       }
     });
 

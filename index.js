@@ -9,20 +9,34 @@ const adminRoutes = require('./routes/admin');
 const voiceRoutes = require('./routes/voice');
 const setupSockets = require('./socket');
 
+function getCorsOrigins() {
+  const raw =
+    process.env.CLIENT_URLS || process.env.CLIENT_URL || 'http://localhost:3000';
+  const list = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return list.length ? list : ['http://localhost:3000'];
+}
+
+const corsOrigins = getCorsOrigins();
+const corsOrigin =
+  corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins;
+
 const app = express();
 const server = http.createServer(app);
 
 // ─── SOCKET.IO ────────────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
     credentials: true
   }
 });
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
-app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio sends form-encoded POST data
 

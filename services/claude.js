@@ -1,5 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { PROJECT_LIFECYCLE_STAGES, Conversation } = require('../models');
+const { normalizePhoneForLead } = require('../utils/phone');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -144,6 +145,26 @@ function keepRecentMessagesWithinBudget(messages, maxChars) {
   return kept;
 }
 
+function buildLeadContactSnapshotBlock(lead) {
+  if (!lead) return '';
+  const name =
+    lead.name && String(lead.name).trim() && lead.name !== 'Unknown'
+      ? String(lead.name).trim()
+      : null;
+  const email =
+    lead.email && String(lead.email).trim() ? String(lead.email).trim() : null;
+  const phone =
+    lead.phone && String(lead.phone).trim() ? String(lead.phone).trim() : null;
+  return (
+    '\n\n--- ON-FILE CONTACT (internal — CRM snapshot; updates as the conversation progresses) ---\n' +
+    `Name: ${name || 'not on file yet'}\n` +
+    `Email: ${email || 'not on file yet'}\n` +
+    `Phone: ${phone || 'not on file yet'}\n` +
+    'Collect missing items only through normal chat messages — never ask them to use a separate form or widget. Keep the tone polite and brief; one question at a time when possible.\n' +
+    '---\n'
+  );
+}
+
 // ─── SYSTEM PROMPT ────────────────────────────────────────────────────────────
 const SALES_SYSTEM_PROMPT = `You are Alex, a sales executive at Steel Building Depot. You help customers get ballpark estimates for construction and installation projects.
 
@@ -172,9 +193,16 @@ PHRASES AND PATTERNS TO AVOID (AI + wrong register):
 - Over-thanking ("Thank you so much for sharing that!") — brief thanks or none
 - Announcing you're about to ask — just ask
 
+CONTACT CAPTURE (mandatory — all in chat, polite, no separate form):
+- Before you discuss detailed scope, timelines, or money in depth, you must have on file: full name (or how they want to be addressed), a working email, and a phone number (10+ digits when normalized).
+- Use the ON-FILE CONTACT section in your context: anything still "not on file yet" you still need to collect in this chat, conversationally.
+- Frame it as standard for quoting and follow-up — never pushy, never guilt-tripping. If they resist, acknowledge once, briefly explain why Steel Building Depot needs it to move forward, and offer to take one field at a time.
+- If they try to jump straight to price or deep technical detail while contact is incomplete, answer at a high level only, then gently steer back: you need name, email, and phone to go deeper or produce a range.
+- When they type an email or phone in a message, treat it as them providing that field — confirm briefly and move on.
+
 YOUR GOAL:
 Guide the customer through a natural conversation to gather enough information to generate a price range estimate. You need to collect:
-1. Their name (first thing — greet them and ask)
+1. Name, email, and phone (in chat — see CONTACT CAPTURE and ON-FILE CONTACT; ask only for what is still missing)
 2. Project type (new build, renovation, addition, etc.)
 3. Building type (warehouse, office, retail, residential, etc.)
 4. Approximate square footage
@@ -187,14 +215,16 @@ Guide the customer through a natural conversation to gather enough information t
 11. Any special requirements or features
 
 CONVERSATION FLOW:
-- Start: Brief professional greeting, then ask for their name (or next step if name known)
-- After name: Move straight into what they're planning — no chit-chat
-- Continue gathering details naturally through conversation
-- Once you have enough info (at minimum: project type, building type, sqft, location), you can offer to generate a quote
+- Opening: You may already have greeted them; continue naturally.
+- Priority: Until ON-FILE CONTACT shows real name, email, and phone (not "not on file yet"), focus on collecting missing contact fields before heavy project interrogation.
+- After contact is complete: move into what they're planning — no chit-chat
+- Continue gathering project details naturally
+- Once you have enough project info AND full contact on file, you can offer to generate a quote
 - Always confirm before generating the quote: "I have enough to give you a price range — shall I?"
 
 QUOTE GENERATION:
-When you have enough information, include a quote block in your response using EXACTLY this format (on its own line):
+Do NOT include a QUOTE_DATA line until ON-FILE CONTACT shows name, email, and phone are all on file (none still "not on file yet"). If contact is incomplete, do not output QUOTE_DATA even if they demand a number — finish contact first.
+When you have enough information AND full contact on file, include a quote block in your response using EXACTLY this format (on its own line):
 QUOTE_DATA:{"priceMin":NUMBER,"priceMax":NUMBER,"complexity":NUMBER,"basis":"BRIEF_REASON","details":{"sqft":"VALUE","roofType":"VALUE","wallPanels":"VALUE","insulation":"VALUE","doors":"VALUE","region":"VALUE","specialRequirements":"VALUE"}}
 
 Pricing guidelines (rough per sqft installed):
@@ -617,13 +647,17 @@ async function chat(messages, previousConversations = [], options = {}) {
     liveTrimmed: built.liveTrimmed,
     usedPriorSummaries: built.usedPriorSummaries,
   });
+  const leadContactBlock = options.lead
+    ? buildLeadContactSnapshotBlock(options.lead)
+    : '';
   let voiceCallContextBlock = '';
   if (options.recentVoiceHandoff && options.recentVoiceHandoff.summaries && options.recentVoiceHandoff.summaries.length) {
     voiceCallContextBlock = buildRecentVoiceHandoffSystemBlock(options.recentVoiceHandoff);
   } else if (options.voiceCallFactSheet && String(options.voiceCallFactSheet).trim()) {
     voiceCallContextBlock = buildPersistentVoiceFactSheetBlock(options.voiceCallFactSheet);
   }
-  const systemWithMemory = SALES_SYSTEM_PROMPT + memoryContext + voiceCallContextBlock;
+  const systemWithMemory =
+    SALES_SYSTEM_PROMPT + leadContactBlock + memoryContext + voiceCallContextBlock;
   const fullContextMessages = built.messages;
 
   const response = await client.messages.create({
@@ -689,7 +723,10 @@ function applyScoreDataToLead(lead, scoreData) {
   if (scoreData.requirements) lead.requirements = scoreData.requirements;
   if (scoreData.name && lead.name === 'Unknown') lead.name = scoreData.name;
   if (scoreData.email && !lead.email) lead.email = scoreData.email;
-  if (scoreData.phone && !lead.phone) lead.phone = scoreData.phone;
+  if (scoreData.phone && !lead.phone) {
+    const raw = String(scoreData.phone).trim();
+    lead.phone = raw ? normalizePhoneForLead(raw) : raw;
+  }
   if (scoreData.company && !lead.company) lead.company = scoreData.company;
   const stage = normalizeProjectLifecycleStage(scoreData.projectLifecycleStage);
   if (stage) {
@@ -753,6 +790,8 @@ Scoring guide:
 - timeline (0-20): Starting within 1 month=20, 1-3 months=15, 3-6 months=10, just exploring=3
 - decisionMaker (0-15): Confirmed decision maker=15, influencer=8, unclear=3
 - projectClarity (0-15): All details provided=15, most details=10, some details=5, vague=0
+
+Extraction: whenever the customer states their email or phone in the transcript, return those fields in the JSON (verbatim from the message when possible). Normalize phone to digits plus optional leading + in the JSON value if clearly a US number.
 
 FULL TRANSCRIPT (all chat sessions, chronological):
 ${transcript}`
