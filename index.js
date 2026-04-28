@@ -46,6 +46,8 @@ app.use('/api/voice', voiceRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
+console.log("HU")
+
 // ─── SOCKETS ──────────────────────────────────────────────────────────────────
 setupSockets(io);
 
