@@ -7,6 +7,7 @@ const {
   normalizePhoneForLead,
   isPhoneInputValid,
 } = require('../utils/phone');
+const { normalizeEmail, isValidEmailShape } = require('../utils/leadIdentity');
 
 /** Allow reconnect / refresh to reopen a recently ended conversation (ms). */
 const RESUME_CONVERSATION_MS = 30 * 60 * 1000;
@@ -17,32 +18,54 @@ module.exports = function setupSockets(io) {
     console.log(`Socket connected: ${socket.id}`);
 
     // ─── START SESSION ──────────────────────────────────────────────────────
-    socket.on('start_session', async ({ sessionId, fingerprint, resumeConversationId }) => {
+    socket.on('start_session', async ({ sessionId, fingerprint, resumeConversationId, identity }) => {
       try {
         const sid = sessionId || uuidv4();
         socket.sessionId = sid;
         socket.join(`session:${sid}`);
 
-        // Check for returning lead by fingerprint/sessionId
-        let lead = null;
-        let isReturning = false;
+        const rawName = identity?.name != null ? String(identity.name).trim() : '';
+        const rawEmail = identity?.email != null ? String(identity.email).trim() : '';
+        const rawPhone = identity?.phone != null ? String(identity.phone).trim() : '';
 
-        if (fingerprint) {
-          // Try to find existing lead by stored leadId in fingerprint
-          lead = await Lead.findById(fingerprint).catch(() => null);
-          if (lead) {
-            isReturning = true;
-
-            // Update last seen
-            lead.lastSeen = new Date();
-            lead.isReturning = true;
-            await lead.save();
-          }
+        if (!rawName || !rawEmail || !rawPhone) {
+          socket.emit('chat_error', {
+            message: 'Please enter your name, email, and phone number to start chatting.',
+          });
+          return;
+        }
+        if (!isValidEmailShape(rawEmail)) {
+          socket.emit('chat_error', {
+            message: 'Enter a valid email address.',
+          });
+          return;
+        }
+        if (!isPhoneInputValid(rawPhone)) {
+          socket.emit('chat_error', {
+            message: 'Enter a valid phone number (at least 10 digits).',
+          });
+          return;
         }
 
-        // Create new lead if not found
-        if (!lead) {
-          lead = new Lead({ lastSeen: new Date(), firstSeen: new Date() });
+        // Same phone → same lead everywhere (name/email can differ; phone is the identity key).
+        let lead = await findLeadByCallerPhone(rawPhone);
+        let isReturning = Boolean(lead);
+
+        if (lead) {
+          lead.lastSeen = new Date();
+          lead.isReturning = true;
+          lead.name = rawName;
+          lead.email = normalizeEmail(rawEmail);
+          lead.phone = normalizePhoneForLead(rawPhone);
+          await lead.save();
+        } else {
+          lead = new Lead({
+            name: rawName,
+            email: normalizeEmail(rawEmail),
+            phone: normalizePhoneForLead(rawPhone),
+            lastSeen: new Date(),
+            firstSeen: new Date(),
+          });
           await lead.save();
         }
 
@@ -143,11 +166,10 @@ module.exports = function setupSockets(io) {
 
         let greetingToSend = null;
         if (!hadPriorConversations) {
-          // New lead: welcome + explain contact is collected in chat before project detail (matches SALES_SYSTEM_PROMPT)
-          greetingToSend =
-            isReturning && lead.name && lead.name !== 'Unknown'
-              ? `Welcome back, ${lead.name}. I'm Alex at Steel Building Depot. What can I help you with on your project today?`
-              : "Hi — thanks for visiting Steel Building Depot. I'm Alex. To discuss your project properly and share any ballpark numbers, I'll need your name, email, and a phone number — all here in chat, nothing separate. Could we start with your name?";
+          const displayName = lead.name && lead.name !== 'Unknown' ? lead.name : rawName;
+          greetingToSend = isReturning
+            ? `Welcome back, ${displayName}. I'm Alex at Steel Building Depot. What can I help you with on your project today?`
+            : `Hi ${displayName}, thanks for visiting Steel Building Depot. I'm Alex — what can I help you with on your project today?`;
           conversation.messages.push({ role: 'assistant', content: greetingToSend });
           await conversation.save();
         } else if (shouldSendLongGapGreeting) {
