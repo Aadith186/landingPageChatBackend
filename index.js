@@ -7,6 +7,7 @@ const cors = require('cors');
 
 const adminRoutes = require('./routes/admin');
 const voiceRoutes = require('./routes/voice');
+const chatRoutes = require('./routes/chat');
 const setupSockets = require('./socket');
 
 function getCorsOrigins() {

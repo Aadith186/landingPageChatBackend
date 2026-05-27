@@ -32,10 +32,22 @@ function normalizePhoneForLead(input) {
   return `+${digits}`;
 }
 
+/**
+ * Resolve a single canonical Lead for this phone.
+ * Uses deterministic ordering so duplicate Lead rows (same number, race / legacy data)
+ * always resolve to the same document — otherwise widget vs admin could split history.
+ */
 async function findLeadByCallerPhone(callerPhone) {
-  const variants = callerPhoneVariants(callerPhone);
+  const raw = String(callerPhone || '').trim();
+  if (!raw || raw === 'unknown') return null;
+  const normalized = normalizePhoneForLead(raw);
+  const variantSet = new Set([
+    ...callerPhoneVariants(raw),
+    ...callerPhoneVariants(normalized),
+  ]);
+  const variants = [...variantSet].filter(Boolean);
   if (variants.length === 0) return null;
-  return Lead.findOne({ phone: { $in: variants } });
+  return Lead.findOne({ phone: { $in: variants } }).sort({ firstSeen: 1 });
 }
 
 function leadNeedsPhone(lead) {

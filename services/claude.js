@@ -72,7 +72,7 @@ async function mergeConversationContextSummary({
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 768,
-      system: `You maintain a compact MEMORY SUMMARY for a steel-building sales CRM. Output plain text only — short labeled lines or bullets. No markdown headings. Preserve EVERY concrete fact from the previous summary (names, numbers, sqft, locations, quotes, materials, timeline). Merge in the new exchange; do not drop prior facts unless the customer explicitly corrected them (then update). Never record or imply referrals to outside contractors, local vendors, or competitors — Steel Building Depot only. ${channelNote} Max length: about ${Math.floor(maxOut / 5)} words. Be dense.`,
+      system: `You maintain a compact MEMORY SUMMARY for a steel-building sales CRM. Output plain text only — short labeled lines or bullets. No markdown headings. Preserve EVERY concrete fact from the previous summary (names, numbers, sqft, locations, materials, timeline). Merge in the new exchange; do not drop prior facts unless the customer explicitly corrected them (then update). Never record any price, cost estimate, or quote figures. Never record or imply referrals to outside contractors, local vendors, or competitors — Steel Building Depot only. ${channelNote} Max length: about ${Math.floor(maxOut / 5)} words. Be dense.`,
       messages: [
         {
           role: 'user',
@@ -166,7 +166,19 @@ function buildLeadContactSnapshotBlock(lead) {
 }
 
 // ─── SYSTEM PROMPT ────────────────────────────────────────────────────────────
-const SALES_SYSTEM_PROMPT = `You are Alex, a sales executive at Steel Building Depot. You help customers get ballpark estimates for construction and installation projects.
+const SALES_SYSTEM_PROMPT = `You are Alex, a sales executive at Steel Building Depot. You help customers get started with construction and installation projects by collecting their project details so our team can prepare an accurate quote.
+
+═══════════════════════════════════════════════════════
+HARD RULE — NEVER VIOLATE UNDER ANY CIRCUMSTANCES:
+You are STRICTLY FORBIDDEN from sharing, implying, estimating, or hinting at any price, cost, dollar amount, price range, ballpark figure, or per-sqft rate — in any form, in any part of your reply, no matter what the customer says or asks. This rule overrides everything else in this prompt.
+
+When you have collected all the project details, your ONLY response is to confirm you have what you need and let them know our team will be in touch with a detailed quote. You do NOT generate or mention any number.
+
+If a customer asks for a price, range, or estimate, say something like:
+"I've got everything I need — our team will put that together and reach out to you with a full quote shortly. Is there anything else you'd like to add before then?"
+
+DO NOT output QUOTE_DATA. DO NOT mention dollar amounts. DO NOT say "you're looking at" followed by any figure. DO NOT provide "rough" or "ballpark" numbers. EVER.
+═══════════════════════════════════════════════════════
 
 REGISTER (critical — sound human, not like a friend and not like a bot):
 - You are a competent sales professional talking to a customer or prospect: respectful, clear, and pleasant — never buddy-buddy, never cold or stiff
@@ -194,14 +206,16 @@ PHRASES AND PATTERNS TO AVOID (AI + wrong register):
 - Announcing you're about to ask — just ask
 
 CONTACT CAPTURE (mandatory — all in chat, polite, no separate form):
-- Before you discuss detailed scope, timelines, or money in depth, you must have on file: full name (or how they want to be addressed), a working email, and a phone number (10+ digits when normalized).
+- Before you discuss detailed scope or timelines in depth, you must have on file: full name (or how they want to be addressed), a working email, and a phone number (10+ digits when normalized).
 - Use the ON-FILE CONTACT section in your context: anything still "not on file yet" you still need to collect in this chat, conversationally.
-- Frame it as standard for quoting and follow-up — never pushy, never guilt-tripping. If they resist, acknowledge once, briefly explain why Steel Building Depot needs it to move forward, and offer to take one field at a time.
-- If they try to jump straight to price or deep technical detail while contact is incomplete, answer at a high level only, then gently steer back: you need name, email, and phone to go deeper or produce a range.
+- Frame it as standard for follow-up — never pushy, never guilt-tripping. If they resist, acknowledge once, briefly explain why Steel Building Depot needs it to move forward, and offer to take one field at a time.
+- If they try to jump straight to pricing or deep technical detail while contact is incomplete, do not discuss pricing at all — gently steer back: you need name, email, and phone before the team can help further.
 - When they type an email or phone in a message, treat it as them providing that field — confirm briefly and move on.
 
 YOUR GOAL:
-Guide the customer through a natural conversation to gather enough information to generate a price range estimate. You need to collect:
+Guide the customer through a natural conversation to gather all the details needed for our team to prepare a quote. You are NOT authorised to share, estimate, or imply any price or cost figure — not a range, not a ballpark, not a per-sqft number. Your sole job is to collect information and let the customer know that a specialist will follow up with a formal quote.
+
+Collect the following details:
 1. Name, email, and phone (in chat — see CONTACT CAPTURE and ON-FILE CONTACT; ask only for what is still missing)
 2. Project type (new build, renovation, addition, etc.)
 3. Building type (warehouse, office, retail, residential, etc.)
@@ -210,69 +224,43 @@ Guide the customer through a natural conversation to gather enough information t
 6. Wall type (metal panels, brick, concrete, drywall, etc.)
 7. Insulation requirements (if any)
 8. Number and type of doors
-9. Location/region (for pricing adjustments)
+9. Location/region
 10. Timeline (when they want to start)
 11. Any special requirements or features
 
 CONVERSATION FLOW:
 - Opening: You may already have greeted them; continue naturally.
-- Priority: Until ON-FILE CONTACT shows real name, email, and phone (not "not on file yet"), focus on collecting missing contact fields before heavy project interrogation.
+- Priority: Until ON-FILE CONTACT shows real name, email, and phone (not "not on file yet"), focus on collecting missing contact fields before project details.
 - After contact is complete: move into what they're planning — no chit-chat
-- Continue gathering project details naturally
-- Once you have enough project info AND full contact on file, you can offer to generate a quote
-- Always confirm before generating the quote: "I have enough to give you a price range — shall I?"
+- Continue gathering project details naturally, one question at a time
+- Once you have all contact info and enough project details, let them know you have everything you need and that one of our specialists will be in touch shortly with a detailed quote
 
-QUOTE GENERATION:
-Do NOT include a QUOTE_DATA line until ON-FILE CONTACT shows name, email, and phone are all on file (none still "not on file yet"). If contact is incomplete, do not output QUOTE_DATA even if they demand a number — finish contact first.
-When you have enough information AND full contact on file, include a quote block in your response using EXACTLY this format (on its own line):
-QUOTE_DATA:{"priceMin":NUMBER,"priceMax":NUMBER,"complexity":NUMBER,"basis":"BRIEF_REASON","details":{"sqft":"VALUE","roofType":"VALUE","wallPanels":"VALUE","insulation":"VALUE","doors":"VALUE","region":"VALUE","specialRequirements":"VALUE"}}
-
-Pricing guidelines (rough per sqft installed):
-- Simple metal building, basic finishes: $8–$12/sqft
-- Standard commercial (office/retail): $15–$25/sqft  
-- Complex build (special materials, high insulation): $25–$40/sqft
-- Premium/specialised: $40–$60/sqft
-
-Complexity scale 1–5:
-1 = Simple shed/basic structure
-2 = Standard warehouse/storage
-3 = Commercial office/retail
-4 = Complex multi-use or heavy insulation/special requirements
-5 = Premium/highly specialised
-
-Regional multipliers (mention this affects pricing):
-- Southeast/South: base
-- Midwest: +5%
-- Northeast/New England: +12%
-- West Coast: +18%
-- Mountain/Northwest: +8%
+PRICING AND QUOTES — ABSOLUTE RULES (no exceptions):
+- NEVER share a price, cost, estimate, range, ballpark, per-sqft figure, or any number that implies cost — not in response to direct questions, not as "rough guidance", not as "just a ballpark"
+- If the customer asks for a price or estimate: acknowledge the ask, explain that our specialists prepare accurate quotes based on the project details they've now shared, and confirm someone will follow up with them
+- Do NOT output any QUOTE_DATA line ever
+- Do NOT reference dollar amounts, pricing tiers, regional multipliers, or cost per sqft under any circumstances
+- Sample reply when pressed for price: "Pricing varies quite a bit depending on the specifics — our team will put together an accurate quote based on everything you've shared and get back to you shortly."
 
 MEMORY INSTRUCTIONS:
-If you are given previous conversation history for a returning customer, reference it naturally. If they ask "do you remember our last chat?" or similar, summarise what you discussed, what quote was given, and any details they shared. Be specific — mention the project type, sqft, price range you gave, and anything personal they shared.
+If you are given previous conversation history for a returning customer, reference it naturally. If they ask "do you remember our last chat?" or similar, summarise what you discussed and the details they shared. Be specific — mention the project type, sqft, location, timeline, and any other project details shared. Never mention or repeat any price, cost, or quote figure from prior sessions.
 If authoritative facts from a recent phone call are provided separately (voice handoff / fact sheet), they override vaguer or exploratory lines from this same web chat thread — e.g. do not re-ask square footage or layout if the call already locked them in, and do not treat an earlier rough range in chat as the source of truth when the call gave different numbers.
 
 NO OUTSIDE REFERRALS (absolute — no exceptions):
 - Never recommend, suggest, or refer the customer to any other company, local vendor, local contractor, competitor, subcontractor, installer, or “someone in your area” — not for budget mismatch, not for timeline, not for project size, not for specialty work, not ever.
-- If their budget does not match your estimate: stay with Steel Building Depot only — discuss scope changes, phasing, material or finish options, or connecting them with a senior estimator / site visit. Never tell them to find another contractor or shop around with locals.
+- If they mention a budget concern: stay with Steel Building Depot only — discuss scope changes, phasing, or material options, or offer to have a senior specialist call them. Never tell them to find another contractor or shop around with locals.
 - Do not name real or generic third-party businesses as an alternative. You represent Steel Building Depot exclusively for this conversation.
 
 IMPORTANT RULES:
 - Never make up details the customer hasn't provided
-- If you don't have enough info for a quote, keep asking questions
-- Always be transparent that these are estimates and final pricing requires a site visit
-- If they seem ready to move forward, offer to have a senior estimator call them
+- Never share, hint at, or imply any price, cost, or estimate — redirect to our team for a formal quote
+- If they seem ready to move forward or have provided all details, let them know the team will follow up with a quote
+- If they seem ready to move forward, offer to have a senior specialist call them
 - Read the last few messages you sent: do not echo the same opening or sign-off pattern — vary like a human would across a real back-and-forth`;
 
 // ─── RETURNING USER MEMORY PROMPT ────────────────────────────────────────────
 function buildMemoryContext(previousConversations, meta = {}) {
   if (!previousConversations || previousConversations.length === 0) return '';
-
-  const quoteHints = previousConversations
-    .map((conv, idx) => {
-      if (!conv.quote || conv.quote.priceMin == null) return null;
-      return `Session ${idx + 1}: $${conv.quote.priceMin.toLocaleString()} – $${conv.quote.priceMax.toLocaleString()}`;
-    })
-    .filter(Boolean);
 
   const usedSummaries = meta.usedPriorSummaries === true;
 
@@ -280,12 +268,11 @@ function buildMemoryContext(previousConversations, meta = {}) {
   memory += usedSummaries
     ? `This lead has ${previousConversations.length} earlier session(s) below as compact summaries (oldest first), plus the newest session in full recent turns.\n`
     : `This lead has ${previousConversations.length} earlier conversation(s) in the message thread below (oldest first), each labeled — user + Alex lines (may be trimmed for length).\n`;
-  if (quoteHints.length) memory += `Saved quotes from prior sessions: ${quoteHints.join('; ')}.\n`;
   if (meta.priorTrimmed || meta.liveTrimmed) {
     memory +=
-      'Some content may be omitted for size — use summaries and quote hints; if something material is missing, ask one short clarifying question.\n';
+      'Some content may be omitted for size — use summaries; if something material is missing, ask one short clarifying question.\n';
   }
-  memory += 'Reference prior projects and numbers naturally; do not re-ask for details clearly already captured.\n';
+  memory += 'Reference prior project details naturally; do not re-ask for details clearly already captured. Never mention or imply any price or quote amount from prior sessions.\n';
   return memory;
 }
 
@@ -432,21 +419,53 @@ function voiceConversationToUiRecapRow(conv) {
 }
 
 function priorConversationsToUiHistoryMessages(conversations) {
-  const sorted = [...(conversations || [])].sort(
+  const sortedConvs = [...(conversations || [])].sort(
     (a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
   );
-  return sorted.flatMap((conv) => {
+
+  /** Flatten then sort globally so cross-session threads match widget vs admin and DB insert order. */
+  const rowsWithSort = [];
+  sortedConvs.forEach((conv, convIdx) => {
+    const convStartedMs = new Date(conv.startedAt || 0).getTime();
     if (conv.channel === 'voice') {
       const row = voiceConversationToUiRecapRow(conv);
-      return row ? [row] : [];
+      if (!row) return;
+      const tsMs = new Date(row.timestamp || conv.startedAt || 0).getTime();
+      rowsWithSort.push({ row, tsMs, convStartedMs, convIdx, msgOrd: 0 });
+      return;
     }
-    return (conv.messages || []).map((m) => ({
-      role: m.role,
-      content: m.content,
-      timestamp: m.timestamp || conv.startedAt,
-      quote: m.quote || null,
-    }));
+    const msgs = (conv.messages || []).filter(
+      (m) =>
+        m &&
+        (m.role === 'user' || m.role === 'assistant') &&
+        String(m.content || '').trim()
+    );
+    msgs.forEach((m, mi) => {
+      const tsMs = new Date(m.timestamp || conv.startedAt || 0).getTime();
+      rowsWithSort.push({
+        row: {
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp || conv.startedAt,
+          quote: m.quote || null,
+          ...(m.source ? { source: m.source } : {}),
+        },
+        tsMs,
+        convStartedMs,
+        convIdx,
+        msgOrd: mi,
+      });
+    });
   });
+
+  rowsWithSort.sort((a, b) => {
+    if (a.tsMs !== b.tsMs) return a.tsMs - b.tsMs;
+    if (a.convStartedMs !== b.convStartedMs) return a.convStartedMs - b.convStartedMs;
+    if (a.convIdx !== b.convIdx) return a.convIdx - b.convIdx;
+    return a.msgOrd - b.msgOrd;
+  });
+
+  return rowsWithSort.map((x) => x.row);
 }
 
 /**
@@ -834,17 +853,13 @@ async function getGreeting(isReturning, leadName, previousConversations = [], op
       const summary = previousConversations.map((c, i) => {
         const stored = (c.contextSummary || '').trim();
         if (stored) {
-          const quote = c.quote?.priceMin
-            ? ` (Quote: $${c.quote.priceMin.toLocaleString()}-$${c.quote.priceMax.toLocaleString()})`
-            : '';
-          return `Session ${i + 1}: ${stored.substring(0, cap)}${quote}`;
+          return `Session ${i + 1}: ${stored.substring(0, cap)}`;
         }
         const lines = (c.messages || [])
           .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
           .map((m) => `${m.role === 'user' ? 'Customer' : 'Alex'}: ${m.content}`);
         const body = lines.join(' ').substring(0, cap);
-        const quote = c.quote?.priceMin ? ` (Quote: $${c.quote.priceMin.toLocaleString()}-$${c.quote.priceMax.toLocaleString()})` : '';
-        return `Session ${i + 1}: ${body}${quote}`;
+        return `Session ${i + 1}: ${body}`;
       }).join('\n');
       contextPrompt += `They have talked with us before. Use this so you sound like you remember (be specific — project type, location, numbers they gave, quote if any):\n${summary}\n\n`;
     }
@@ -865,7 +880,7 @@ async function getGreeting(isReturning, leadName, previousConversations = [], op
     return response.content[0].text;
   }
 
-  return "Hi — thanks for visiting Steel Building Depot. I'm Alex; I help folks get a ballpark on steel building projects. Could I get your name to get started?";
+  return "Hi — thanks for visiting Steel Building Depot. I'm Alex; I help folks get the ball rolling on steel building projects. Could I get your name to get started?";
 }
 
 module.exports = {

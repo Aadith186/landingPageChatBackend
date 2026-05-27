@@ -94,13 +94,28 @@ module.exports = function setupSockets(io) {
             socket.conversationId = existing._id.toString();
             socket.sessionId = existing.sessionId || sid;
 
-            const uiMessages = (existing.messages || []).map((m) => ({
-              role: m.role,
-              content: m.content,
-              quote: m.quote || null,
-              timestamp: m.timestamp || existing.startedAt,
-              ...(m.source ? { source: m.source } : {}),
-            }));
+            const uiMessages = (existing.messages || [])
+              .filter(
+                (m) =>
+                  m &&
+                  (m.role === 'user' || m.role === 'assistant') &&
+                  String(m.content || '').trim()
+              )
+              .map((m) => ({
+                role: m.role,
+                content: m.content,
+                quote: m.quote || null,
+                timestamp: m.timestamp || existing.startedAt,
+                ...(m.source ? { source: m.source } : {}),
+              }))
+              .sort((a, b) => {
+                const ta = new Date(a.timestamp).getTime();
+                const tb = new Date(b.timestamp).getTime();
+                return (
+                  (Number.isFinite(ta) ? ta : 0) -
+                  (Number.isFinite(tb) ? tb : 0)
+                );
+              });
 
             socket.emit('session_started', {
               sessionId: existing.sessionId || sid,
@@ -128,7 +143,7 @@ module.exports = function setupSockets(io) {
           }
         }
 
-        // All conversations for this lead (by leadId), full messages — not only lead.conversations[]
+        // All conversations for this lead before we create the new thread (new row not in DB yet).
         const priorOtherConversations = await claudeService.fetchAllPriorConversationsForLead(lead._id, {});
         const hadPriorConversations = isReturning && priorOtherConversations.length > 0;
 
